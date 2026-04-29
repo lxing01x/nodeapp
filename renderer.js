@@ -6,7 +6,8 @@ class GameUI {
     this.autoPlayEnabled = false;
     this.autoPlayTimer = null;
     this.timeDisplayTimer = null;
-    this.playedCards = [];
+    this.isAnimating = false;
+    this.pendingAction = null;
     
     this.initializeElements();
     this.initializeEventListeners();
@@ -68,9 +69,10 @@ class GameUI {
     this.stopAutoPlay();
     this.autoPlayToggle.checked = false;
     this.autoPlayEnabled = false;
+    this.isAnimating = false;
+    this.pendingAction = null;
     
     this.game = new Game();
-    this.playedCards = [];
     this.clearPlayedCards();
     this.updateUI();
     this.startTimeDisplay();
@@ -98,6 +100,10 @@ class GameUI {
   playerPlayCard() {
     if (!this.game || this.game.gameEnded) return;
     if (this.game.currentTurn !== 'player') return;
+    if (this.isAnimating) {
+      this.pendingAction = { type: 'play', player: 'player' };
+      return;
+    }
     
     this.playCard('player');
   }
@@ -105,6 +111,10 @@ class GameUI {
   aiPlayCard() {
     if (!this.game || this.game.gameEnded) return;
     if (this.game.currentTurn !== 'ai') return;
+    if (this.isAnimating) {
+      this.pendingAction = { type: 'play', player: 'ai' };
+      return;
+    }
     
     setTimeout(() => {
       this.playCard('ai');
@@ -119,15 +129,18 @@ class GameUI {
     
     const { card, lastAction, currentTurn, gameEnded, winner } = result;
     
-    this.addPlayedCard(card, playerType);
+    const cardElement = this.addPlayedCardToDOM(card);
     
     if (lastAction.type === 'collect') {
-      setTimeout(() => {
-        this.highlightAndCollectCards(lastAction);
-      }, 300);
+      this.isAnimating = true;
       
       const playerName = playerType === 'player' ? '你' : '电脑';
       this.showMessage(`${playerName}收集了 ${lastAction.collectedCards.length} 张牌！`);
+      
+      this.highlightAndCollectCards(lastAction, cardElement, () => {
+        this.isAnimating = false;
+        this.processPendingAction();
+      });
     }
     
     setTimeout(() => {
@@ -135,17 +148,38 @@ class GameUI {
       
       if (gameEnded) {
         this.endGame();
-      } else if (currentTurn === 'ai') {
-        this.aiPlayCard();
-      } else if (this.autoPlayEnabled && currentTurn === 'player') {
-        setTimeout(() => this.playerPlayCard(), 600);
+      } else if (!lastAction || lastAction.type !== 'collect') {
+        if (currentTurn === 'ai') {
+          this.aiPlayCard();
+        } else if (this.autoPlayEnabled && currentTurn === 'player') {
+          setTimeout(() => this.playerPlayCard(), 600);
+        }
       }
-    }, lastAction.type === 'collect' ? 1200 : 100);
+    }, lastAction && lastAction.type === 'collect' ? 0 : 100);
   }
 
-  addPlayedCard(card, playerType) {
-    this.playedCards.push(card);
-    
+  processPendingAction() {
+    if (this.pendingAction) {
+      const action = this.pendingAction;
+      this.pendingAction = null;
+      
+      if (action.type === 'play') {
+        if (action.player === 'player' && this.game.currentTurn === 'player') {
+          this.playerPlayCard();
+        } else if (action.player === 'ai' && this.game.currentTurn === 'ai') {
+          this.aiPlayCard();
+        }
+      }
+    } else if (this.game && !this.game.gameEnded) {
+      if (this.game.currentTurn === 'ai') {
+        this.aiPlayCard();
+      } else if (this.autoPlayEnabled && this.game.currentTurn === 'player') {
+        setTimeout(() => this.playerPlayCard(), 300);
+      }
+    }
+  }
+
+  addPlayedCardToDOM(card) {
     const cardElement = this.createCardElement(card);
     
     if (this.playedCardsContainer.querySelector('.played-cards-placeholder')) {
@@ -155,14 +189,15 @@ class GameUI {
     this.playedCardsContainer.appendChild(cardElement);
     this.scrollToLastCard();
     
-    this.playedCardsCount.textContent = this.playedCards.length;
+    this.updatePlayedCardsCount();
+    
+    return cardElement;
   }
 
   createCardElement(card) {
     const cardDiv = document.createElement('div');
     cardDiv.className = 'played-card';
     cardDiv.dataset.cardId = card.id;
-    cardDiv.dataset.index = this.playedCards.length - 1;
     
     const colorClass = card.isRed ? 'card-red' : 'card-black';
     
@@ -186,29 +221,53 @@ class GameUI {
     return cardDiv;
   }
 
-  highlightAndCollectCards(lastAction) {
-    const startIndex = lastAction.matchIndex;
-    const cardElements = this.playedCardsContainer.querySelectorAll('.played-card');
+  highlightAndCollectCards(lastAction, currentCardElement, callback) {
+    const collectedCards = lastAction.collectedCards;
+    const allCardElements = Array.from(this.playedCardsContainer.querySelectorAll('.played-card'));
     
-    cardElements.forEach((el, index) => {
-      if (index >= startIndex) {
-        el.classList.add('matching-card');
-        
-        setTimeout(() => {
-          el.classList.add('collected-card');
-          
-          setTimeout(() => {
-            el.remove();
-            this.playedCards = this.game.playedCards;
-            this.playedCardsCount.textContent = this.playedCards.length;
-            
-            if (this.playedCardsContainer.children.length === 0) {
-              this.playedCardsContainer.innerHTML = '<div class="played-cards-placeholder">点击下方牌堆开始出牌</div>';
-            }
-          }, 800);
-        }, 600);
+    const elementsToCollect = [];
+    const collectedIds = new Set(collectedCards.map(c => c.id));
+    
+    for (const el of allCardElements) {
+      if (collectedIds.has(el.dataset.cardId)) {
+        elementsToCollect.push(el);
       }
+    }
+    
+    elementsToCollect.forEach(el => {
+      el.classList.add('matching-card');
     });
+    
+    setTimeout(() => {
+      elementsToCollect.forEach(el => {
+        el.classList.add('collected-card');
+      });
+      
+      setTimeout(() => {
+        elementsToCollect.forEach(el => {
+          el.remove();
+        });
+        
+        if (this.playedCardsContainer.children.length === 0) {
+          this.playedCardsContainer.innerHTML = '<div class="played-cards-placeholder">点击下方牌堆开始出牌</div>';
+        }
+        
+        this.updatePlayedCardsCount();
+        
+        if (callback) {
+          callback();
+        }
+      }, 800);
+    }, 600);
+  }
+
+  updatePlayedCardsCount() {
+    if (this.game) {
+      this.playedCardsCount.textContent = this.game.playedCards.length;
+    } else {
+      const cardElements = this.playedCardsContainer.querySelectorAll('.played-card');
+      this.playedCardsCount.textContent = cardElements.length;
+    }
   }
 
   clearPlayedCards() {
@@ -258,6 +317,8 @@ class GameUI {
 
   startAutoPlay() {
     if (!this.game || this.game.gameEnded) return;
+    if (this.isAnimating) return;
+    
     if (this.game.currentTurn === 'player') {
       setTimeout(() => this.playerPlayCard(), 600);
     }
@@ -272,6 +333,8 @@ class GameUI {
 
   endGame() {
     this.stopAutoPlay();
+    this.isAnimating = false;
+    this.pendingAction = null;
     
     if (this.timeDisplayTimer) {
       clearInterval(this.timeDisplayTimer);
