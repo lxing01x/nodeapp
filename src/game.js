@@ -181,16 +181,15 @@ class Game {
   }
 
   checkGameEnd() {
-    if (this.player.remainingCards === 0 && this.ai.remainingCards === 0) {
+    if (this.player.remainingCards === 0 || this.ai.remainingCards === 0) {
       this.gameEnded = true;
-      this.winner = this.player.score > this.ai.score ? 'player' : 
-                   (this.player.score < this.ai.score ? 'ai' : 'draw');
-    } else if (this.player.remainingCards === 0) {
-      this.gameEnded = true;
-      this.winner = 'ai';
-    } else if (this.ai.remainingCards === 0) {
-      this.gameEnded = true;
-      this.winner = 'player';
+      if (this.player.score > this.ai.score) {
+        this.winner = 'player';
+      } else if (this.player.score < this.ai.score) {
+        this.winner = 'ai';
+      } else {
+        this.winner = 'draw';
+      }
     }
   }
 
